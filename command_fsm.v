@@ -20,6 +20,13 @@ module command_fsm(
     input wire tWR_done,
     input wire tWTR_done,
     input wire tRTP_done,
+    
+
+    output reg activate_issued,
+    output reg read_issued,
+    output reg write_issued,
+    output reg precharge_issued,
+    output reg refresh_issued,
 
     //To Physical layer
     output reg cas_n,
@@ -29,18 +36,19 @@ module command_fsm(
     output reg [13:0] addr,
     output reg [2:0] ba,
     output reg cmd_valid
+
 );
 
-typedef enum logic[2:0] {
-    IDLE,
-    ACTIVATE,
-    READ,
-    WRITE,
-    PRECHARGE,
-    REFRESH
-} state_t;
+// State encoding
+    parameter IDLE      = 3'b000;
+    parameter ACTIVATE  = 3'b001;
+    parameter READ      = 3'b010;
+    parameter WRITE     = 3'b011;
+    parameter PRECHARGE = 3'b100;
+    parameter REFRESH   = 3'b101;
 
-state_t state, next_state;
+
+reg [2:0] state, next_state;
 
 // Sequential logic for state register
 always @(posedge clk or posedge reset) begin
@@ -50,7 +58,14 @@ always @(posedge clk or posedge reset) begin
         state <= next_state;
     end
 end
-
+assign bus_idle = (state == IDLE || state == PRECHARGE_DONE) &&
+                  !tRCD_running &&
+                  !tWR_running &&
+                  !tRFC_running &&
+                  !tRP_running &&
+                  !read_pending &&
+                  !write_pending;
+                  
 // Combinational logic for next state and outputs
 always @(*) begin
     // Default outputs
@@ -62,6 +77,12 @@ always @(*) begin
     ba = 3'b0;
     cmd_valid = 1'b0;
     next_state = state;
+
+    activate_issued = 1'b0;
+    read_issued     = 1'b0;
+    write_issued    = 1'b0;
+    refresh_issued  = 1'b0;
+    precharge_issued = 1'b0;
 
     case (state)
         IDLE: begin
@@ -76,7 +97,8 @@ always @(*) begin
 
         ACTIVATE: begin
             // Issue ACTIVATE command
-            cas_n = 1'b1;
+            activate_issued = 1'b1;
+            cas_n = 1'b1; 
             ras_n = 1'b0;
             we_n = 1'b1;
             cs_n = 1'b0;
@@ -87,7 +109,9 @@ always @(*) begin
             if (tRCD_done) begin
                 if (read_req) begin
                     next_state = READ;
-                end else if (write_req) begin
+                end
+
+                else if (write_req) begin
                     next_state = WRITE;
                 end
             end
@@ -95,6 +119,7 @@ always @(*) begin
 
         READ: begin
             // Issue READ command
+            read_issued = 1'b1;
             cas_n = 1'b0;
             ras_n = 1'b1;
             we_n = 1'b1;
@@ -102,12 +127,14 @@ always @(*) begin
             addr = {4'b0, col_addr};
             ba = bank_addr;
             cmd_valid = 1'b1;
-            
+            if(tRTP_done) begin 
             next_state = PRECHARGE;
+            end
         end
 
         WRITE: begin
             // Issue WRITE command
+            write_issued = 1'b1;
             cas_n = 1'b0;
             ras_n = 1'b1;
             we_n = 1'b0;
@@ -123,6 +150,7 @@ always @(*) begin
 
         PRECHARGE: begin
             // Issue PRECHARGE command
+            precharge_issued = 1'b1;
             cas_n = 1'b1;
             ras_n = 1'b0;
             we_n = 1'b0;
@@ -138,6 +166,7 @@ always @(*) begin
 
         REFRESH: begin
             // Issue REFRESH command
+            refresh_issued = 1'b1;
             cas_n = 1'b0;
             ras_n = 1'b0;
             we_n = 1'b1;
